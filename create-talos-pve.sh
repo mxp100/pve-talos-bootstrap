@@ -63,10 +63,6 @@ ISO_URL="${ISO_URL:-https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b0880
 ISO_INSTALLER_URL="${ISO_INSTALLER_URL:-factory.talos.dev/metal-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.11.5}"
 ISO_LOCAL_PATH="${ISO_LOCAL_PATH:-${ISO_DIR}/metal-amd64.iso}"
 
-CURL_BINARY="${CURL_BINARY:-}"
-STATIC_CURL_PATH="${STATIC_CURL_PATH:-/usr/local/bin/curl-static}"
-STATIC_CURL_URL="${STATIC_CURL_URL:-https://github.com/moparisthebest/static-curl/releases/latest/download/curl-amd64}"
-
 VM_BASE_NAME_CP="${VM_BASE_NAME_CP:-${CLUSTER_NAME}-cp}"
 VM_BASE_NAME_WK="${VM_BASE_NAME_WK:-${CLUSTER_NAME}-wk}"
 
@@ -79,8 +75,6 @@ RECONCILE="${RECONCILE:-true}"
 # IP parameters
 GATEWAY="${GATEWAY:-192.168.10.1}"
 CIDR_PREFIX="${CIDR_PREFIX:-24}"
-
-export CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 # DNS servers
 if [[ -n "${DNS_SERVER:-}" ]]; then
@@ -123,52 +117,11 @@ ensure_storage_exists() {
   fi
 }
 
-setup_static_curl() {
-  if [[ -x "$STATIC_CURL_PATH" ]]; then
-    echo "Static curl already available at $STATIC_CURL_PATH"
-    CURL_BINARY="$STATIC_CURL_PATH"
-    return 0
-  fi
-
-  if command -v curl >/dev/null 2>&1; then
-    echo "Downloading static curl..."
-    curl -L -o "$STATIC_CURL_PATH" "$STATIC_CURL_URL" 2>/dev/null || {
-      echo "Failed to download static curl with system curl"
-      return 1
-    }
-  elif command -v wget >/dev/null 2>&1; then
-    echo "Downloading static curl with wget..."
-    wget --no-check-certificate -O "$STATIC_CURL_PATH" "$STATIC_CURL_URL" 2>/dev/null || {
-      echo "Failed to download static curl with wget"
-      return 1
-    }
-  else
-    echo "Neither curl nor wget available to download static curl"
-    return 1
-  fi
-
-  chmod +x "$STATIC_CURL_PATH"
-
-  if [[ -x "$STATIC_CURL_PATH" ]]; then
-    echo "Static curl installed successfully at $STATIC_CURL_PATH"
-    CURL_BINARY="$STATIC_CURL_PATH"
-
-    "$CURL_BINARY" --version >/dev/null 2>&1 || {
-      echo "Static curl binary doesn't work properly"
-      rm -f "$STATIC_CURL_PATH"
-      return 1
-    }
-    return 0
-  fi
-
-  return 1
-}
-
 import_iso_if_needed() {
   mkdir -p "$ISO_DIR"
   if [[ ! -f "$ISO_LOCAL_PATH" ]]; then
     echo "Downloading Talos ISO..."
-    "$CURL_BINARY" --cacert "$CURL_CA_BUNDLE" -L -o "$ISO_LOCAL_PATH" "$ISO_URL" || {
+    curl -Lo "$ISO_LOCAL_PATH" "$ISO_URL" || {
       echo "Failed to download Talos ISO"
       exit 1
     }
@@ -432,19 +385,10 @@ reconcile_group() {
 }
 
 check_and_install() {
-  setup_static_curl || {
-    echo "Warning: Could not setup static curl, falling back to system curl"
-    if command -v curl >/dev/null 2>&1; then
-      CURL_BINARY="curl"
-    else
-      echo "Error: No curl available"
-      exit 1
-    fi
-  }
 
   if ! command -v talosctl >/dev/null 2>&1; then
     echo "Install talosctl"
-    "${CURL_BINARY}" -sL https://talos.dev/install | sh
+    curl -sL https://talos.dev/install | sh
     echo "DONE"
   fi
 
@@ -463,13 +407,13 @@ check_and_install() {
   fi
 
   if ! command -v kubectl >/dev/null 2>&1; then
-    "${CURL_BINARY}" -LO "https://dl.k8s.io/release/v1.28.2/bin/linux/amd64/kubectl"
+    curl -LO "https://dl.k8s.io/release/v1.28.2/bin/linux/amd64/kubectl"
     chmod +x kubectl
     mv kubectl /usr/local/bin/
   fi
 
   if ! command -v helm >/dev/null 2>&1; then
-    "${CURL_BINARY}" -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
   fi
 }
 
@@ -489,6 +433,7 @@ generate_config() {
 }
 
 clean_seeds() {
+  mkdir -p "$(pwd)/config"
   rm -rf "$(pwd)/seeds/${CLUSTER_NAME}"* || true
   rm -f "${ISO_DIR}/${CLUSTER_NAME}"* || true
 }
