@@ -243,8 +243,6 @@ attach_talos_iso() {
 
   # Для directory-сторожа: path как STORAGE_NAME:iso/filename.iso
   qm set "$vmid" --ide2 "${STORAGE_NAME}:iso/${iso_name},media=cdrom" >/dev/null
-  # Boot: сначала CD, потом диск
-  qm set "$vmid" --boot order=ide2;scsi0 >/dev/null
 }
 
 attach_seed_iso() {
@@ -290,11 +288,11 @@ create_vm() {
     --scsihw virtio-scsi-pci >/dev/null
 
   # Основной диск
-  qm set "$vmid" --scsi0 "${STORAGE_NAME}:${disk_gib}G" >/dev/null
+  qm set "$vmid" --scsi0 "${STORAGE_NAME}:${disk_gib}" >/dev/null
 
   # Дополнительный диск
   if [[ "${extra_disk_gib}" -gt 0 ]]; then
-    qm set "$vmid" --scsi1 "${STORAGE_NAME}:${extra_disk_gib}G" >/dev/null
+    qm set "$vmid" --scsi1 "${STORAGE_NAME}:${extra_disk_gib}" >/dev/null
   fi
 
   # Автостарт
