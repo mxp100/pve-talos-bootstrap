@@ -243,6 +243,8 @@ attach_talos_iso() {
 
   # Для directory-сторожа: path как STORAGE_NAME:iso/filename.iso
   qm set "$vmid" --ide2 "${STORAGE_NAME}:iso/${iso_name},media=cdrom" >/dev/null
+
+  qm set "$vmid" --boot order='scsi0;ide2' >/dev/null
 }
 
 attach_seed_iso() {
