@@ -59,8 +59,8 @@ WK_EXTRA_DISK_ENABLED="${WK_EXTRA_DISK_ENABLED:-false}"
 WK_EXTRA_DISK_SIZE="${WK_EXTRA_DISK_SIZE:-100}"
 
 # Talos images
-ISO_URL="${ISO_URL:-https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.11.5/metal-amd64.iso}"
-ISO_INSTALLER_URL="${ISO_INSTALLER_URL:-factory.talos.dev/metal-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.11.5}"
+ISO_URL="${ISO_URL:-https://factory.talos.dev/image/2fcc09d8cccf7fea0f198ba11e0238cad9c885ad2dfab9fb39192437f4c7ed2d/v1.11.5/metal-amd64.iso}"
+ISO_INSTALLER_URL="${ISO_INSTALLER_URL:-factory.talos.dev/metal-installer/2fcc09d8cccf7fea0f198ba11e0238cad9c885ad2dfab9fb39192437f4c7ed2d:v1.11.5}"
 ISO_LOCAL_PATH="${ISO_LOCAL_PATH:-${ISO_DIR}/metal-amd64.iso}"
 
 VM_BASE_NAME_CP="${VM_BASE_NAME_CP:-${CLUSTER_NAME}-cp}"
