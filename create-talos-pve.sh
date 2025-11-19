@@ -628,13 +628,13 @@ main() {
   generate_config
 
   # Проверки размеров массивов IP
-  if [ "${#CP_IPS[@]}" -gt "$CP_COUNT" ]; then
-    echo "Error: CP_IPS array size (${#CP_IPS[@]}) exceeds CP_COUNT ($CP_COUNT)"
+  if [ "$CP_COUNT" -gt "${#CP_IPS[@]}" ]; then
+    echo "Error: CP_COUNT ($CP_COUNT) exceeds CP_IPS array size (${#CP_IPS[@]})"
     exit 1
   fi
 
-  if [ "${#WK_IPS[@]}" -gt "$WK_COUNT" ]; then
-    echo "Error: WK_IPS array size (${#WK_IPS[@]}) exceeds WK_COUNT ($WK_COUNT)"
+  if [ "$WK_COUNT" -gt "${#WK_IPS[@]}" ]; then
+    echo "Error: $WK_COUNT ($WK_COUNT) exceeds WK_IPS array size (${#WK_IPS[@]})"
     exit 1
   fi
 
