@@ -40,9 +40,10 @@ fi
 CLUSTER_NAME="${CLUSTER_NAME:-talos-pve}"
 
 # Proxmox storage/ISO/bridge
-STORAGE_NAME="${STORAGE_NAME:-local}"              # имя стораджа Proxmox
-ISO_DIR="${ISO_DIR:-/var/lib/vz/template/iso}"     # директория с ISO
-BRIDGE_NAME="${BRIDGE_NAME:-vmbr1}"                # сетевой bridge
+STORAGE_ISO_NAME="${STORAGE_ISO_NAME:-local}"         # имя ISO storage Proxmox
+STORAGE_IMAGE_NAME="${STORAGE_IMAGE_NAME:-local-lvm}" # имя ISO storage Proxmox
+ISO_DIR="${ISO_DIR:-/var/lib/vz/template/iso}"        # директория с ISO
+BRIDGE_NAME="${BRIDGE_NAME:-vmbr1}"                   # сетевой bridge
 
 # Control plane config
 CP_COUNT="${CP_COUNT:-3}"
@@ -111,8 +112,13 @@ SEEDS_DIR="${SEEDS_DIR:-$(pwd)/seeds}"
 # ========= Helpers =========
 
 ensure_storage_exists() {
-  if ! pvesm status | awk 'NR>1 {print $1}' | grep -qx "$STORAGE_NAME"; then
-    echo "Storage '$STORAGE_NAME' not found in Proxmox (pvesm status)."
+  if ! pvesm status | awk 'NR>1 {print $1}' | grep -qx "$STORAGE_ISO_NAME"; then
+    echo "Storage '$STORAGE_ISO_NAME' not found in Proxmox (pvesm status)."
+    exit 1
+  fi
+
+  if ! pvesm status | awk 'NR>1 {print $1}' | grep -qx "$STORAGE_IMAGE_NAME"; then
+    echo "Storage '$STORAGE_IMAGE_NAME' not found in Proxmox (pvesm status)."
     exit 1
   fi
 }
@@ -128,7 +134,7 @@ import_iso_if_needed() {
   else
     echo "Talos ISO already exists at $ISO_LOCAL_PATH"
   fi
-  echo "Talos ISO ready at $ISO_LOCAL_PATH (storage: $STORAGE_NAME)"
+  echo "Talos ISO ready at $ISO_LOCAL_PATH (storage: $STORAGE_ISO_NAME)"
 }
 
 vmid_for_cp() {
@@ -241,8 +247,8 @@ attach_talos_iso() {
   local iso_name
   iso_name=$(basename "$iso_path")
 
-  # Для directory-сторожа: path как STORAGE_NAME:iso/filename.iso
-  qm set "$vmid" --ide2 "${STORAGE_NAME}:iso/${iso_name},media=cdrom" >/dev/null
+  # Для directory-сторожа: path как STORAGE_ISO_NAME:iso/filename.iso
+  qm set "$vmid" --ide2 "${STORAGE_ISO_NAME}:iso/${iso_name},media=cdrom" >/dev/null
 
   qm set "$vmid" --boot order='scsi0;ide2' >/dev/null
 }
@@ -260,7 +266,7 @@ attach_seed_iso() {
   iso_name=$(basename "$iso_path")
 
   # Подключаем вторым CD-ROM
-  qm set "$vmid" --ide3 "${STORAGE_NAME}:iso/${iso_name},media=cdrom" >/dev/null
+  qm set "$vmid" --ide3 "${STORAGE_ISO_NAME}:iso/${iso_name},media=cdrom" >/dev/null
 }
 
 create_vm() {
@@ -290,11 +296,11 @@ create_vm() {
     --scsihw virtio-scsi-pci >/dev/null
 
   # Основной диск
-  qm set "$vmid" --scsi0 "${STORAGE_NAME}:${disk_gib}" >/dev/null
+  qm set "$vmid" --scsi0 "${STORAGE_IMAGE_NAME}:${disk_gib}" >/dev/null
 
   # Дополнительный диск
   if [[ "${extra_disk_gib}" -gt 0 ]]; then
-    qm set "$vmid" --scsi1 "${STORAGE_NAME}:${extra_disk_gib}" >/dev/null
+    qm set "$vmid" --scsi1 "${STORAGE_IMAGE_NAME}:${extra_disk_gib}" >/dev/null
   fi
 
   # Автостарт
