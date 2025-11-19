@@ -29,23 +29,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ========= LOAD ENV =========
-# Load .env file if exists, otherwise use defaults
 if [[ -f .env ]]; then
   set -a
+  # shellcheck source=/dev/null
   source .env
   set +a
 fi
 
 # ========= CONFIG WITH DEFAULTS =========
-CLUSTER_NAME="${CLUSTER_NAME:-talos-xcp}"
-NETWORK_NAME="${NETWORK_NAME:-vnic}"
-SR_NAME="${SR_NAME:-}"
+CLUSTER_NAME="${CLUSTER_NAME:-talos-pve}"
+
+# Proxmox storage/ISO/bridge
+STORAGE_NAME="${STORAGE_NAME:-local}"              # имя стораджа Proxmox
+ISO_DIR="${ISO_DIR:-/var/lib/vz/template/iso}"     # директория с ISO
+BRIDGE_NAME="${BRIDGE_NAME:-vmbr1}"                # сетевой bridge
 
 # Control plane config
 CP_COUNT="${CP_COUNT:-3}"
 CP_CPU="${CP_CPU:-2}"
-CP_RAM="${CP_RAM:-4}"
-CP_DISK="${CP_DISK:-20}"
+CP_RAM="${CP_RAM:-4}"       # GiB
+CP_DISK="${CP_DISK:-20}"    # GiB
 
 # Workers config
 WK_COUNT="${WK_COUNT:-3}"
@@ -55,17 +58,21 @@ WK_DISK="${WK_DISK:-100}"
 WK_EXTRA_DISK_ENABLED="${WK_EXTRA_DISK_ENABLED:-false}"
 WK_EXTRA_DISK_SIZE="${WK_EXTRA_DISK_SIZE:-100}"
 
-# Images need with support xen-guest-agent and kernel arguments "talos.config=metal-iso"
-ISO_URL="${ISO_URL:-https://factory.talos.dev/image/f2aa06dc76070d9c9fbec2d5fee1abf452f7fccd91637337e3d868c074242fae/v1.11.3/metal-amd64.iso}"
-ISO_INSTALLER_URL="${ISO_INSTALLER_URL:-factory.talos.dev/metal-installer/f2aa06dc76070d9c9fbec2d5fee1abf452f7fccd91637337e3d868c074242fae:v1.11.3}"
-ISO_LOCAL_PATH="${ISO_LOCAL_PATH:-/opt/iso/metal-amd64.iso}"
-ISO_SR_NAME="${ISO_SR_NAME:-ISO SR}"
+# Talos images
+ISO_URL="${ISO_URL:-https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.11.5/metal-amd64.iso}"
+ISO_INSTALLER_URL="${ISO_INSTALLER_URL:-factory.talos.dev/metal-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.11.5}"
+ISO_LOCAL_PATH="${ISO_LOCAL_PATH:-${ISO_DIR}/metal-amd64.iso}"
 
 CURL_BINARY="${CURL_BINARY:-}"
 STATIC_CURL_PATH="${STATIC_CURL_PATH:-/usr/local/bin/curl-static}"
 STATIC_CURL_URL="${STATIC_CURL_URL:-https://github.com/moparisthebest/static-curl/releases/latest/download/curl-amd64}"
+
 VM_BASE_NAME_CP="${VM_BASE_NAME_CP:-${CLUSTER_NAME}-cp}"
 VM_BASE_NAME_WK="${VM_BASE_NAME_WK:-${CLUSTER_NAME}-wk}"
+
+# Базовые VMID (vmid = base + index-1)
+CP_VMID_BASE="${CP_VMID_BASE:-900}"
+WK_VMID_BASE="${WK_VMID_BASE:-910}"
 
 RECONCILE="${RECONCILE:-true}"
 
@@ -73,28 +80,30 @@ RECONCILE="${RECONCILE:-true}"
 GATEWAY="${GATEWAY:-192.168.10.1}"
 CIDR_PREFIX="${CIDR_PREFIX:-24}"
 
-export CURL_CA_BUNDLE=/etc/ssl/certs/ca-bundle.crt
+export CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
-# Parse DNS_SERVER from comma-separated string to array
+# DNS servers
 if [[ -n "${DNS_SERVER:-}" ]]; then
   IFS=',' read -r -a DNS_SERVER <<< "$DNS_SERVER"
 else
   DNS_SERVER=("8.8.8.8" "1.1.1.1")
 fi
 
-# Parse IP ranges from comma-separated strings to arrays
+# Control-plane IPs
 if [[ -n "${CP_IPS:-}" ]]; then
   IFS=',' read -r -a CP_IPS <<< "$CP_IPS"
 else
   CP_IPS=("192.168.10.2" "192.168.10.3" "192.168.10.4")
 fi
 
+# Worker IPs
 if [[ -n "${WK_IPS:-}" ]]; then
   IFS=',' read -r -a WK_IPS <<< "$WK_IPS"
 else
   WK_IPS=("192.168.10.10" "192.168.10.11" "192.168.10.12")
 fi
 
+# Внешние адреса для certSANs (необязательно)
 if [[ -n "${EXTERNAL_IPS:-}" ]]; then
   IFS=',' read -r -a EXTERNAL_IPS <<< "$EXTERNAL_IPS"
 else
@@ -103,32 +112,24 @@ fi
 
 VIP_IP="${VIP_IP:-192.168.10.50}"
 
-# Folders for generate seed configs and iso files
 SEEDS_DIR="${SEEDS_DIR:-$(pwd)/seeds}"
-ISO_DIR="${ISO_DIR:-/opt/iso}"
 
 # ========= Helpers =========
-xe_must() {
-  xe "$@" >/dev/null;
-}
 
-get_default_sr() {
-  xe pool-list --minimal | xargs -I{} xe pool-param-get uuid={} param-name=default-SR
-}
-
-get_pool_master() {
-  xe pool-list --minimal | xargs -I{} xe pool-param-get uuid={} param-name=master
+ensure_storage_exists() {
+  if ! pvesm status | awk 'NR>1 {print $1}' | grep -qx "$STORAGE_NAME"; then
+    echo "Storage '$STORAGE_NAME' not found in Proxmox (pvesm status)."
+    exit 1
+  fi
 }
 
 setup_static_curl() {
-  # Check if static curl already exists
   if [[ -x "$STATIC_CURL_PATH" ]]; then
     echo "Static curl already available at $STATIC_CURL_PATH"
     CURL_BINARY="$STATIC_CURL_PATH"
     return 0
   fi
 
-  # Try system curl first (for downloading static curl)
   if command -v curl >/dev/null 2>&1; then
     echo "Downloading static curl..."
     curl -L -o "$STATIC_CURL_PATH" "$STATIC_CURL_URL" 2>/dev/null || {
@@ -147,12 +148,11 @@ setup_static_curl() {
   fi
 
   chmod +x "$STATIC_CURL_PATH"
-  
+
   if [[ -x "$STATIC_CURL_PATH" ]]; then
     echo "Static curl installed successfully at $STATIC_CURL_PATH"
     CURL_BINARY="$STATIC_CURL_PATH"
-    
-    # Verify it works
+
     "$CURL_BINARY" --version >/dev/null 2>&1 || {
       echo "Static curl binary doesn't work properly"
       rm -f "$STATIC_CURL_PATH"
@@ -160,80 +160,53 @@ setup_static_curl() {
     }
     return 0
   fi
-  
+
   return 1
-}
-
-ensure_iso_sr() {
-  local iso_sr
-  iso_sr=$(xe sr-list name-label="${ISO_SR_NAME}" type=iso --minimal || true)
-  if [[ -z "$iso_sr" ]]; then
-    echo "Creating ISO SR..."
-    local host_uuid sr_uuid pbd_uuid
-    host_uuid=$(get_pool_master)
-    if [[ -z "$host_uuid" ]]; then
-      echo "Pool master UUID is empty. Check your pool configuration."
-      exit 1
-    fi
-    mkdir -p "$ISO_DIR"
-    sr_uuid=$(xe sr-create name-label="${ISO_SR_NAME}" type=iso device-config:location="$ISO_DIR" device-config:legacy_mode=true content-type=iso)
-    if [[ -z "$sr_uuid" ]]; then
-      echo "Failed to create ISO SR at ${ISO_DIR}"
-      exit 1
-    fi
-    pbd_uuid=$(xe pbd-list sr-uuid="$sr_uuid" host-uuid="$host_uuid" --minimal)
-    if [[ -z "$pbd_uuid" ]]; then
-      pbd_uuid=$(xe pbd-create sr-uuid="$sr_uuid" host-uuid="$host_uuid" device-config:location="$ISO_DIR" device-config:legacy_mode=true)
-    fi
-    if [[ -z "$pbd_uuid" ]]; then
-      echo "Failed to create/locate PBD for ISO SR"
-      exit 1
-    fi
-    xe_must pbd-plug uuid="$pbd_uuid"
-    xe_must sr-scan uuid="$sr_uuid"
-  else
-    xe_must sr-scan uuid="$iso_sr"
-  fi
-}
-
-lookup_iso_vdi_by_name() {
-  local iso_name="$1"
-  local iso_sr_uuid
-  iso_sr_uuid=$(xe sr-list name-label="${ISO_SR_NAME}" type=iso --minimal)
-  if [[ -z "$iso_sr_uuid" ]]; then
-    echo ""
-    return 0
-  fi
-  xe vdi-list sr-uuid="$iso_sr_uuid" name-label="$iso_name" --minimal
 }
 
 import_iso_if_needed() {
   mkdir -p "$ISO_DIR"
   if [[ ! -f "$ISO_LOCAL_PATH" ]]; then
-    echo "Downloading Talos ISO with static curl..."
-    "$CURL_BINARY" --cacert /etc/ssl/certs/ca-bundle.crt -L -o "$ISO_LOCAL_PATH" "$ISO_URL" || {
+    echo "Downloading Talos ISO..."
+    "$CURL_BINARY" --cacert "$CURL_CA_BUNDLE" -L -o "$ISO_LOCAL_PATH" "$ISO_URL" || {
       echo "Failed to download Talos ISO"
       exit 1
     }
   else
     echo "Talos ISO already exists at $ISO_LOCAL_PATH"
   fi
-  ensure_iso_sr
-  echo "Talos ISO ready at $ISO_LOCAL_PATH"
+  echo "Talos ISO ready at $ISO_LOCAL_PATH (storage: $STORAGE_NAME)"
 }
 
-find_network_uuid() {
+vmid_for_cp() {
+  local index="$1"
+  echo $((CP_VMID_BASE + index - 1))
+}
+
+vmid_for_wk() {
+  local index="$1"
+  echo $((WK_VMID_BASE + index - 1))
+}
+
+get_vmid_by_name() {
   local name="$1"
-  local res
-  res=$(xe network-list name-label="$name" --minimal)
-  # Disallow multiple or empty
-  if [[ -z "$res" ]]; then
-    echo ""
-  elif [[ "$res" == *,* ]]; then
-    echo ""
-  else
-    echo "$res"
+  qm list | awk -v n="$name" '$2 == n {print $1}' | head -n1
+}
+
+vm_exists_by_name() {
+  local name="$1"
+  local id
+  id=$(get_vmid_by_name "$name" || true)
+  [[ -n "$id" ]]
+}
+
+destroy_vm_by_vmid() {
+  local vmid="$1"
+  if qm status "$vmid" 2>/dev/null | grep -q "status: running"; then
+    qm stop "$vmid" --skiplock || true
+    sleep 2
   fi
+  qm destroy "$vmid" --purge 2>/dev/null || true
 }
 
 create_seed_iso_from_mc() {
@@ -245,7 +218,6 @@ create_seed_iso_from_mc() {
   local src_dir="${SEEDS_DIR}/${vmname}"
   mkdir -p "$src_dir"
 
-  # Выбор шаблона machineconfig
   local config_file
   if [[ "$role" == "cp" ]]; then
     config_file="$(pwd)/config/controlplane.yaml"
@@ -259,20 +231,19 @@ create_seed_iso_from_mc() {
   fi
 
   local ip_cidr="${ip}/${CIDR_PREFIX}"
-  
-  # Создаем полный machineconfig
+
+  # Базовый конфиг
   local config
   config=$(yq eval '... comments=""' "$config_file" | \
-
-  yq '.machine.network.hostname = "'"${vmname}"'"' | \
-  yq '.machine.network.interfaces[0].interface = "enX0"' | \
-  yq '.machine.network.interfaces[0].dhcp = false' | \
-  yq '.machine.network.interfaces[0].routes[0].gateway = "'"${GATEWAY}"'"' | \
-  yq '.machine.network.interfaces[0].addresses[0] = "'"$ip_cidr"'"' | \
-  yq '.machine.time.servers[0] = "pool.ntp.org"' | \
-  yq '.machine.install.image = "'"${ISO_INSTALLER_URL}"'"' | \
-  yq '.machine.install.wipe = true' | \
-  yq '.machine.install.disk = "/dev/xvda"')
+    yq '.machine.network.hostname = "'"${vmname}"'"' | \
+    yq '.machine.network.interfaces[0].interface = "eth0"' | \
+    yq '.machine.network.interfaces[0].dhcp = false' | \
+    yq '.machine.network.interfaces[0].routes[0].gateway = "'"${GATEWAY}"'"' | \
+    yq '.machine.network.interfaces[0].addresses[0] = "'"$ip_cidr"'"' | \
+    yq '.machine.time.servers[0] = "pool.ntp.org"' | \
+    yq '.machine.install.image = "'"${ISO_INSTALLER_URL}"'"' | \
+    yq '.machine.install.wipe = true' | \
+    yq '.machine.install.disk = "/dev/sda"')
 
   for dns in "${DNS_SERVER[@]}"; do
     config=$(echo "$config" | yq eval '.machine.network.nameservers += ["'"$dns"'"]')
@@ -284,7 +255,6 @@ create_seed_iso_from_mc() {
       yq '.cluster.network.cni.name = "none"'
     )
 
-    # Add control plane IPs to certSANs
     for cp_ip in "${CP_IPS[@]}"; do
       config=$(echo "$config" | yq eval '.cluster.apiServer.certSANs += ["'"$cp_ip"'"]')
     done
@@ -296,9 +266,9 @@ create_seed_iso_from_mc() {
 
   echo "$config" > "${src_dir}/config.yaml"
 
-  # Сборка ISO только если не режим seeds-only
   if [[ "$SEEDS_ONLY" == "false" ]]; then
-    genisoimage -quiet -volid metal-iso -joliet -rock -o "$out_iso" -graft-points "config.yaml=${src_dir}/config.yaml"
+    genisoimage -quiet -volid metal-iso -joliet -rock -o "$out_iso" \
+      -graft-points "config.yaml=${src_dir}/config.yaml"
     echo "$out_iso"
   else
     echo "Seed config created: ${src_dir}/config.yaml"
@@ -306,172 +276,90 @@ create_seed_iso_from_mc() {
   fi
 }
 
-attach_iso() {
-  local vm_uuid="$1"
+attach_talos_iso() {
+  local vmid="$1"
   local iso_path="$2"
-  echo "VM: $vm_uuid"
-  if [[ -z "$vm_uuid" ]]; then
-    echo "attach_iso: VM uuid is empty"
-    exit 1
-  fi
+
   if [[ ! -f "$iso_path" ]]; then
-    echo "attach_iso: ISO not found at $iso_path"
+    echo "Talos ISO not found at $iso_path"
     exit 1
   fi
-  local iso_name iso_vdi cd_vbd
+
+  local iso_name
   iso_name=$(basename "$iso_path")
-  iso_vdi=$(lookup_iso_vdi_by_name "$iso_name")
-  if [[ -z "$iso_vdi" ]]; then
-    echo "ISO '$iso_name' not found in ISO SR index. Running SR scan..."
-    ensure_iso_sr
-    iso_vdi=$(lookup_iso_vdi_by_name "$iso_name")
-    if [[ -z "$iso_vdi" ]]; then
-      echo "Failed to locate ISO '$iso_name' in ISO SR at ${ISO_DIR}. Ensure the ISO SR location matches ISO_DIR."
-      exit 1
-    fi
-  fi
-  cd_vbd=$(xe vbd-list vm-uuid="$vm_uuid" type=CD --minimal)
-  if [[ -z "$cd_vbd" ]]; then
-    cd_vbd=$(xe vbd-create vm-uuid="$vm_uuid" type=CD device=3 bootable=true mode=RO empty=true)
-  fi
-  if [[ -z "$cd_vbd" ]]; then
-    echo "attach_iso: failed to create/list CD VBD"
-    exit 1
-  fi
-  xe_must vbd-param-set uuid="$cd_vbd" userdevice=3
-  xe_must vbd-insert uuid="$cd_vbd" vdi-uuid="$iso_vdi"
+
+  # Для directory-сторожа: path как STORAGE_NAME:iso/filename.iso
+  qm set "$vmid" --ide2 "${STORAGE_NAME}:iso/${iso_name},media=cdrom" >/dev/null
+  # Boot: сначала CD, потом диск
+  qm set "$vmid" --boot order=ide2;scsi0 >/dev/null
 }
 
-attach_second_iso() {
-  local vm_uuid="$1"
+attach_seed_iso() {
+  local vmid="$1"
   local iso_path="$2"
-  if [[ -z "$vm_uuid" ]]; then
-    echo "attach_second_iso: VM uuid is empty"
-    exit 1
-  fi
+
   if [[ ! -f "$iso_path" ]]; then
-    echo "attach_second_iso: seed ISO not found at $iso_path"
+    echo "Seed ISO not found at $iso_path"
     exit 1
   fi
 
-  # Get SR from VM's existing disk
-  local vm_sr vdi_uuid vbd_uuid iso_name
-  local existing_vbd existing_vdi
-  existing_vbd=$(xe vbd-list vm-uuid="$vm_uuid" type=Disk --minimal | cut -d',' -f1)
-  if [[ -n "$existing_vbd" ]]; then
-    existing_vdi=$(xe vbd-param-get uuid="$existing_vbd" param-name=vdi-uuid 2>/dev/null || true)
-    if [[ -n "$existing_vdi" ]]; then
-      vm_sr=$(xe vdi-param-get uuid="$existing_vdi" param-name=sr-uuid 2>/dev/null || true)
-    fi
-  fi
-
-  # Fallback to default SR
-  if [[ -z "$vm_sr" ]]; then
-    if [[ -n "$SR_NAME" ]]; then
-      vm_sr=$(xe sr-list name-label="$SR_NAME" --minimal)
-    else
-      vm_sr=$(get_default_sr)
-    fi
-  fi
-
-  if [[ -z "$vm_sr" ]]; then
-    echo "Error: Cannot determine SR for VM"
-    exit 1
-  fi
-
+  local iso_name
   iso_name=$(basename "$iso_path")
-  echo "Using SR: $vm_sr"
 
-  # Create VDI and import ISO content
-  echo "Creating VDI for seed ISO (read-only disk)..."
-  local iso_size
-  iso_size=$(stat -c %s "$iso_path" 2>/dev/null || stat -f %z "$iso_path" 2>/dev/null)
+  # Подключаем вторым CD-ROM
+  qm set "$vmid" --ide3 "${STORAGE_NAME}:iso/${iso_name},media=cdrom" >/dev/null
+}
 
-  if [[ -z "$iso_size" ]] || [[ ! "$iso_size" =~ ^[0-9]+$ ]]; then
-    echo "Error: Cannot determine seed ISO size"
+create_vm() {
+  local name="$1"
+  local vmid="$2"
+  local vcpu="$3"
+  local ram_gib="$4"
+  local disk_gib="$5"
+  local bridge="$6"
+  local extra_disk_gib="${7:-0}"
+
+  if qm config "$vmid" &>/dev/null; then
+    echo "VMID $vmid already exists, refusing to overwrite"
     exit 1
   fi
 
-  echo "Seed ISO size: $iso_size bytes"
+  local mem_mb=$((ram_gib * 1024))
 
-  vdi_uuid=$(xe vdi-create sr-uuid="$vm_sr" name-label="$iso_name" type=user virtual-size="$iso_size" read-only=false)
+  qm create "$vmid" \
+    --name "$name" \
+    --memory "$mem_mb" \
+    --cores "$vcpu" \
+    --sockets 1 \
+    --cpu host \
+    --net0 "virtio,bridge=${bridge}" \
+    --ostype l26 \
+    --scsihw virtio-scsi-pci >/dev/null
 
-  # Import ISO data into VDI
-  echo "Importing seed ISO data into VDI..."
-  xe vdi-import uuid="$vdi_uuid" filename="$iso_path" format=raw
+  # Основной диск
+  qm set "$vmid" --scsi0 "${STORAGE_NAME}:${disk_gib}G" >/dev/null
 
-  # Attach as disk device (not CD)
-  vbd_uuid=$(xe vbd-create vm-uuid="$vm_uuid" vdi-uuid="$vdi_uuid" device=2 type=Disk mode=RO bootable=false)
-  xe_must vbd-param-set uuid="$vbd_uuid" userdevice=2
-
-  echo "Attached seed ISO as read-only disk: $iso_name"
-}
-
-vm_exists_by_name() {
-  local name="$1"
-  local uuid
-  uuid=$(xe vm-list name-label="$name" is-control-domain=false --minimal)
-  [[ -n "$uuid" ]]
-}
-
-get_vm_uuid_by_name() {
-  local name="$1"
-  xe vm-list name-label="$name" is-control-domain=false --minimal
-}
-
-destroy_vm_by_uuid() {
-  local uuid="$1"
-  local power_state
-  power_state=$(xe vm-param-get uuid="$uuid" param-name=power-state || true)
-  if [[ "$power_state" == "running" ]]; then
-    xe vm-shutdown uuid="$uuid" force=true >/dev/null 2>&1 || xe vm-reset-powerstate uuid="$uuid" >/dev/null 2>&1 || true
+  # Дополнительный диск
+  if [[ "${extra_disk_gib}" -gt 0 ]]; then
+    qm set "$vmid" --scsi1 "${STORAGE_NAME}:${extra_disk_gib}G" >/dev/null
   fi
-  # detach/destroy VBDs
-  local vbds
-  vbds=$(xe vbd-list vm-uuid="$uuid" --minimal || true)
-  if [[ -n "$vbds" ]]; then
-    IFS=, read -r -a vbd_arr <<< "$vbds"
-    for vbd in "${vbd_arr[@]}"; do
-      xe vbd-unplug uuid="$vbd" >/dev/null 2>&1 || true
-      xe_must vbd-destroy uuid="$vbd"
-    done
-  fi
-  # destroy VIFs
-  local vifs
-  vifs=$(xe vif-list vm-uuid="$uuid" --minimal || true)
-  if [[ -n "$vifs" ]]; then
-    IFS=, read -r -a vif_arr <<< "$vifs"
-    for vif in "${vif_arr[@]}"; do
-      xe_must vif-destroy uuid="$vif"
-    done
-  fi
-  # collect VDIs via VBDs (before uninstall)
-  local vdi_list
-  vdi_list=$(xe vbd-list vm-uuid="$uuid" params=vdi-uuid --minimal 2>/dev/null || true)
 
-  xe_must vm-uninstall uuid="$uuid" force=true
+  # Автостарт
+  qm set "$vmid" --onboot 1 >/dev/null
 
-  if [[ -n "$vdi_list" ]]; then
-    IFS=, read -r -a vdi_arr <<< "$vdi_list"
-    for vdi in "${vdi_arr[@]}"; do
-      [[ -n "$vdi" ]] && xe_must vdi-destroy uuid="$vdi"
-    done
-  fi
+  echo "$vmid"
 }
 
 reconcile_group() {
-  # $1 base name prefix, $2 desired count, $3 net_uuid, $4 sr_uuid, $5 role(cp|wk), $6 vcpu, $7 ramGiB, $8 diskGiB, $9 extra_disk_gib
+  # $1 base name, $2 desired count, $3 role(cp|wk), $4 vcpu, $5 ramGiB, $6 diskGiB, $7 extra_disk_gib
   local base="$1"
   local desired="$2"
-  local net_uuid="$3"
-  local sr_uuid="$4"
-  local role="$5"
-  local vcpu="$6"
-  local ram="$7"
-  local disk="$8"
-  local extra_disk="${9:-0}"
+  local role="$3"
+  local vcpu="$4"
+  local ram="$5"
+  local disk="$6"
+  local extra_disk="${7:-0}"
 
-  # В режиме seeds-only только генерируем конфиги
   if [[ "$SEEDS_ONLY" == "true" ]]; then
     echo "Generating seed configs for ${base}..."
     for i in $(seq 1 "$desired"); do
@@ -491,15 +379,21 @@ reconcile_group() {
     return 0
   fi
 
-  # Создадим недостающие 1..desired
+  # Создаём недостающие
   for i in $(seq 1 "$desired"); do
     local name="${base}${i}"
-    if vm_exists_by_name "$name"; then
-      echo "VM exists: $name"
+    local vmid=""
+    if [[ "$role" == "cp" ]]; then
+      vmid=$(vmid_for_cp "$i")
+    else
+      vmid=$(vmid_for_wk "$i")
+    fi
+
+    if vm_exists_by_name "$name" || qm config "$vmid" &>/dev/null; then
+      echo "VM exists: $name (vmid=$vmid)"
       continue
     fi
 
-    # Определяем IP из соответствующего массива
     local ip=""
     if [[ "$role" == "cp" ]]; then
       ip="${CP_IPS[$((i-1))]}"
@@ -511,115 +405,30 @@ reconcile_group() {
       continue
     fi
 
-    local vm_uuid
-    vm_uuid=$(create_vm "$name" "$vcpu" "$ram" "$disk" "$net_uuid" "$sr_uuid" "$extra_disk")
-    echo "VM UUID: $vm_uuid"
-    attach_iso "$vm_uuid" "$ISO_LOCAL_PATH"
-    echo "Disk source attached"
+    local created_vmid
+    created_vmid=$(create_vm "$name" "$vmid" "$vcpu" "$ram" "$disk" "$BRIDGE_NAME" "$extra_disk")
+    echo "VM created: $name (vmid=$created_vmid)"
+    attach_talos_iso "$created_vmid" "$ISO_LOCAL_PATH"
     local seed_iso
     seed_iso=$(create_seed_iso_from_mc "$name" "$ip" "$role")
     echo "Seed ISO: $seed_iso"
-    attach_second_iso "$vm_uuid" "$seed_iso"
-    echo "Created VM: $name ($ip) uuid=$vm_uuid"
+    attach_seed_iso "$created_vmid" "$seed_iso"
+    echo "Configured VM: $name ($ip) vmid=$created_vmid"
   done
 
-  # Если нужно — удалим лишние (индексы > desired)
+  # Удаляем лишние (индекс > desired)
   if [[ "${RECONCILE}" == "true" ]]; then
-    # Найдем все ВМ по префиксу base
-    local names
-    names=$(xe vm-list is-control-domain=false params=name-label --minimal | tr , '\n' | grep -E "^${base}[0-9]+$" || true)
-    if [[ -n "$names" ]]; then
-      while IFS= read -r existing; do
-        [[ -z "$existing" ]] && continue
-        local idx
-        idx=$(echo "$existing" | sed -E "s/^${base}([0-9]+)$/\1/")
+    # Выберем по имени
+    qm list | awk 'NR>1 {print $1, $2}' | while read -r id nm; do
+      if [[ "$nm" =~ ^${base}([0-9]+)$ ]]; then
+        local idx="${BASH_REMATCH[1]}"
         if [[ "$idx" -gt "$desired" ]]; then
-          local uuid
-          uuid=$(get_vm_uuid_by_name "$existing")
-          echo "Removing extra VM: $existing uuid=$uuid"
-          destroy_vm_by_uuid "$uuid"
+          echo "Removing extra VM: $nm (vmid=$id)"
+          destroy_vm_by_vmid "$id"
         fi
-      done <<< "$names"
-    fi
+      fi
+    done
   fi
-}
-
-create_vm() {
-  local name="$1"
-  local vcpu="$2"
-  local ram_gib="$3"
-  local disk_gib="$4"
-  local net_uuid="$5"
-  local sr_uuid="$6"
-  local extra_disk_gib="${7:-0}"
-
-  local template_uuid vm_uuid vdi_uuid vbd_uuid vif_uuid
-
-  # Use HVM template instead
-  template_uuid=$(xe template-list name-label="Other install media" --minimal)
-  if [[ -z "$template_uuid" ]]; then
-    echo "Template 'Other install media' not found. Run 'xe template-list' and adjust the name."
-    exit 1
-  fi
-  if [[ -z "$net_uuid" ]]; then
-    echo "Network UUID is empty. Check NETWORK_NAME."
-    exit 1
-  fi
-  if [[ -z "$sr_uuid" ]]; then
-    echo "SR UUID is empty. Check SR_NAME or default SR."
-    exit 1
-  fi
-  vm_uuid=$(xe vm-clone new-name-label="$name" uuid="$template_uuid")
-  xe_must vm-param-set uuid="$vm_uuid" is-a-template=false
-  xe_must vm-param-set uuid="$vm_uuid" name-description="Talos Linux node"
-
-  # Set HVM mode
-  xe_must vm-param-set uuid="$vm_uuid" HVM-boot-policy="BIOS order"
-  xe_must vm-param-set uuid="$vm_uuid" HVM-boot-params:order="cd"
-
-  # Set auto_poweron
-  xe_must vm-param-set uuid="$vm_uuid" other-config:auto_poweron=true
-
-  # Remove PV bootloader settings
-  xe_must vm-param-remove uuid="$vm_uuid" param-name=PV-bootloader 2>/dev/null || true
-  xe_must vm-param-remove uuid="$vm_uuid" param-name=PV-args 2>/dev/null || true
-
-  # Platform flags for HVM mode
-  xe_must vm-param-set uuid="$vm_uuid" platform:acpi=1
-  xe_must vm-param-set uuid="$vm_uuid" platform:apic=true
-  xe_must vm-param-set uuid="$vm_uuid" platform:pae=true
-  xe_must vm-param-set uuid="$vm_uuid" platform:viridian=true
-  xe_must vm-param-set uuid="$vm_uuid" platform:nx=true
-  xe_must vm-param-set uuid="$vm_uuid" platform:device-model=qemu-upstream-compat
-
-  # Set memory with proper static and dynamic values
-  local bytes=$((ram_gib*1024*1024*1024))
-  xe_must vm-memory-set uuid="$vm_uuid" memory="$bytes"
-
-  # Set shadow multiplier for HVM domain
-  xe_must vm-param-set uuid="$vm_uuid" HVM-shadow-multiplier=1.0
-
-  # vCPU
-  xe_must vm-param-set uuid="$vm_uuid" VCPUs-max="$vcpu" VCPUs-at-startup="$vcpu"
-
-  # vNIC
-  vif_uuid=$(xe vif-create vm-uuid="$vm_uuid" network-uuid="$net_uuid" device=0)
-  xe_must vif-param-set uuid="$vif_uuid" other-config:ethtool-gso="off"
-
-  # Disk
-  vdi_uuid=$(xe vdi-create name-label="${name}-disk" sr-uuid="$sr_uuid" type=user virtual-size=$((disk_gib*1024*1024*1024)))
-  vbd_uuid=$(xe vbd-create vm-uuid="$vm_uuid" vdi-uuid="$vdi_uuid" device=0 bootable=true type=Disk mode=RW)
-  xe_must vbd-param-set uuid="$vbd_uuid" userdevice=0
-
-  # Extra disk (optional)
-  if [[ "$extra_disk_gib" -gt 0 ]]; then
-    local extra_vdi_uuid extra_vbd_uuid
-    extra_vdi_uuid=$(xe vdi-create name-label="${name}-disk-extra" sr-uuid="$sr_uuid" type=user virtual-size=$((extra_disk_gib*1024*1024*1024)))
-    extra_vbd_uuid=$(xe vbd-create vm-uuid="$vm_uuid" vdi-uuid="$extra_vdi_uuid" device=1 bootable=false type=Disk mode=RW)
-    xe_must vbd-param-set uuid="$extra_vbd_uuid" userdevice=1
-  fi
-
-  echo "$vm_uuid"
 }
 
 check_and_install() {
@@ -641,7 +450,8 @@ check_and_install() {
 
   if ! command -v genisoimage >/dev/null 2>&1; then
     echo "Install genisoimage"
-    yum install -y genisoimage >/dev/null
+    apt-get update -y >/dev/null
+    apt-get install -y genisoimage >/dev/null
     echo "DONE"
   fi
 
@@ -655,67 +465,59 @@ check_and_install() {
   if ! command -v kubectl >/dev/null 2>&1; then
     "${CURL_BINARY}" -LO "https://dl.k8s.io/release/v1.28.2/bin/linux/amd64/kubectl"
     chmod +x kubectl
-    sudo mv kubectl /usr/local/bin/
+    mv kubectl /usr/local/bin/
   fi
 
   if ! command -v helm >/dev/null 2>&1; then
-    "${CURL_BINARY}" -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | sudo bash
+    "${CURL_BINARY}" -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
   fi
 }
 
 generate_config() {
-    local config_dir
-    config_dir="$(pwd)/config"
-    mkdir -p "$config_dir"
+  local config_dir
+  config_dir="$(pwd)/config"
+  mkdir -p "$config_dir"
 
-    if [[ ! -f "$config_dir/controlplane.yaml" ]] || [[ ! -f "$config_dir/worker.yaml" ]]; then
-        talosctl gen config "$CLUSTER_NAME" "https://${CP_IPS[0]}:6443" -o "$config_dir"
-        echo "Generated new Talos config files in $config_dir"
-    else
-        echo "Config files already exist in $config_dir, skipping generation"
-        echo "To regenerate, delete the directory or add --force flag to talosctl"
-    fi
+  if [[ ! -f "$config_dir/controlplane.yaml" ]] || [[ ! -f "$config_dir/worker.yaml" ]]; then
+    talosctl gen config "$CLUSTER_NAME" "https://${CP_IPS[0]}:6443" -o "$config_dir"
+    echo "Generated new Talos config files in $config_dir"
+  else
+    echo "Config files already exist in $config_dir, skipping generation"
+  fi
 
-    # Configure endpoints with all control plane IPs
-    talosctl --talosconfig "$(pwd)/config/talosconfig" config endpoints "${CP_IPS[@]}"
+  talosctl --talosconfig "$(pwd)/config/talosconfig" config endpoints "${CP_IPS[@]}"
 }
 
 clean_seeds() {
-  rm -rf "$(pwd)/seeds/${CLUSTER_NAME}"*
-  rm -f "${ISO_DIR}/${CLUSTER_NAME}"*
+  rm -rf "$(pwd)/seeds/${CLUSTER_NAME}"* || true
+  rm -f "${ISO_DIR}/${CLUSTER_NAME}"* || true
 }
 
 start_all_vms() {
   echo "Starting all cluster VMs..."
 
-  # Start control plane VMs
   for i in $(seq 1 "$CP_COUNT"); do
     local name="${VM_BASE_NAME_CP}${i}"
-    local vm_uuid
-    vm_uuid=$(get_vm_uuid_by_name "$name")
-    if [[ -n "$vm_uuid" ]]; then
-      local power_state
-      power_state=$(xe vm-param-get uuid="$vm_uuid" param-name=power-state)
-      if [[ "$power_state" != "running" ]]; then
-        echo "Starting $name..."
-        xe vm-start uuid="$vm_uuid"
+    local vmid
+    vmid=$(get_vmid_by_name "$name" || true)
+    if [[ -n "$vmid" ]]; then
+      if ! qm status "$vmid" 2>/dev/null | grep -q "status: running"; then
+        echo "Starting $name (vmid=$vmid)..."
+        qm start "$vmid"
       else
         echo "$name is already running"
       fi
     fi
   done
 
-  # Start worker VMs
   for i in $(seq 1 "$WK_COUNT"); do
     local name="${VM_BASE_NAME_WK}${i}"
-    local vm_uuid
-    vm_uuid=$(get_vm_uuid_by_name "$name")
-    if [[ -n "$vm_uuid" ]]; then
-      local power_state
-      power_state=$(xe vm-param-get uuid="$vm_uuid" param-name=power-state)
-      if [[ "$power_state" != "running" ]]; then
-        echo "Starting $name..."
-        xe vm-start uuid="$vm_uuid"
+    local vmid
+    vmid=$(get_vmid_by_name "$name" || true)
+    if [[ -n "$vmid" ]]; then
+      if ! qm status "$vmid" 2>/dev/null | grep -q "status: running"; then
+        echo "Starting $name (vmid=$vmid)..."
+        qm start "$vmid"
       else
         echo "$name is already running"
       fi
@@ -732,10 +534,9 @@ wait_for_talos_api() {
   while [[ $attempt -lt $max_attempts ]]; do
     all_ready=true
 
-    # Check all control plane nodes
     for ip in "${CP_IPS[@]}"; do
       if ! talosctl --talosconfig "$(pwd)/config/talosconfig" \
-           --nodes "$ip" version &>/dev/null; then
+        --nodes "$ip" version &>/dev/null; then
         echo "Waiting for Talos API on $ip... (attempt $((attempt+1))/$max_attempts)"
         all_ready=false
         break
@@ -758,23 +559,21 @@ wait_for_talos_api() {
 bootstrap_cluster() {
   echo "Bootstrapping Talos cluster..."
 
-  # Bootstrap using the first control plane node
   local bootstrap_node="${CP_IPS[0]}"
   echo "Bootstrapping from node: $bootstrap_node"
 
   talosctl --talosconfig "$(pwd)/config/talosconfig" \
-           --nodes "$bootstrap_node" \
-           bootstrap
+    --nodes "$bootstrap_node" \
+    bootstrap
 
   echo "Bootstrap command sent. Waiting for Kubernetes to initialize..."
 
-  # Wait for kubeconfig to be available
   local max_wait=120
   local waited=0
   while [[ $waited -lt $max_wait ]]; do
     if talosctl --talosconfig "$(pwd)/config/talosconfig" \
-         --nodes "$bootstrap_node" \
-         kubeconfig "$(pwd)/config/kubeconfig" 2>/dev/null; then
+      --nodes "$bootstrap_node" \
+      kubeconfig "$(pwd)/config/kubeconfig" 2>/dev/null; then
       echo "Kubeconfig successfully retrieved"
       break
     fi
@@ -797,7 +596,6 @@ install_cilium() {
 
   export KUBECONFIG="$(pwd)/config/kubeconfig"
 
-  # Wait for Kubernetes API to be fully ready
   echo "Waiting for Kubernetes API to be ready..."
   local max_attempts=60
   local attempt=0
@@ -816,12 +614,10 @@ install_cilium() {
     return 1
   fi
 
-  # Add Cilium Helm repository
   echo "Adding Cilium Helm repository..."
   helm repo add cilium https://helm.cilium.io/
   helm repo update
 
-  # Install Cilium
   echo "Installing Cilium..."
   helm install cilium cilium/cilium \
     --version 1.18.3 \
@@ -842,7 +638,6 @@ install_cilium() {
 
   echo "Waiting for Cilium pods to be ready..."
 
-  # Retry logic for kubectl wait - 10 attempts with delays
   local wait_attempts=0
   local max_wait_attempts=10
   local wait_success=false
@@ -882,89 +677,48 @@ install_cilium() {
 main() {
   echo "Preparing..."
 
+  ensure_storage_exists
   check_and_install
   clean_seeds
   generate_config
 
-  # В режиме seeds-only пропускаем проверки VM и ISO
-  if [[ "$SEEDS_ONLY" == "true" ]]; then
-    echo "Running in seeds-only mode..."
-    
-    # Validate CP_IPS size
-    if [ "${#CP_IPS[@]}" -gt "$CP_COUNT" ]; then
-      echo "Error: CP_IPS array size (${#CP_IPS[@]}) exceeds CP_COUNT ($CP_COUNT)"
-      exit 1
-    fi
-
-    # Validate WK_IPS size
-    if [ "${#WK_IPS[@]}" -gt "$WK_COUNT" ]; then
-      echo "Error: WK_IPS array size (${#WK_IPS[@]}) exceeds WK_COUNT ($WK_COUNT)"
-      exit 1
-    fi
-
-    # Генерация только seed конфигов
-    reconcile_group "$VM_BASE_NAME_CP" "$CP_COUNT" "" "" "cp" 2 4 20
-    reconcile_group "$VM_BASE_NAME_WK" "$WK_COUNT" "" "" "wk" 4 16 100
-
-    echo "Done. Seed configs generated in $SEEDS_DIR"
-    return 0
-  fi
-
-  local net_uuid sr_uuid default_sr
-  net_uuid=$(find_network_uuid "$NETWORK_NAME")
-  if [[ -z "$net_uuid" ]]; then
-    echo "Network '$NETWORK_NAME' not found or ambiguous. Use a unique name-label."
-    exit 1
-  fi
-
-  if [[ -z "$SR_NAME" ]]; then
-    default_sr=$(get_default_sr)
-    if [[ -z "$default_sr" ]]; then
-      echo "Default SR not found. Set SR_NAME."
-      exit 1
-    fi
-    sr_uuid="$default_sr"
-  else
-    sr_uuid=$(xe sr-list name-label="$SR_NAME" --minimal)
-    if [[ -z "$sr_uuid" || "$sr_uuid" == *,* ]]; then
-      echo "SR '$SR_NAME' not found or ambiguous."
-      exit 1
-    fi
-  fi
-
-  # Validate CP_IPS size
+  # Проверки размеров массивов IP
   if [ "${#CP_IPS[@]}" -gt "$CP_COUNT" ]; then
     echo "Error: CP_IPS array size (${#CP_IPS[@]}) exceeds CP_COUNT ($CP_COUNT)"
     exit 1
   fi
 
-  # Validate WK_IPS size
   if [ "${#WK_IPS[@]}" -gt "$WK_COUNT" ]; then
     echo "Error: WK_IPS array size (${#WK_IPS[@]}) exceeds WK_COUNT ($WK_COUNT)"
     exit 1
   fi
 
+  if [[ "$SEEDS_ONLY" == "true" ]]; then
+    echo "Running in seeds-only mode..."
+    reconcile_group "$VM_BASE_NAME_CP" "$CP_COUNT" "cp" "$CP_CPU" "$CP_RAM" "$CP_DISK" 0
+    reconcile_group "$VM_BASE_NAME_WK" "$WK_COUNT" "wk" "$WK_CPU" "$WK_RAM" "$WK_DISK" "$WK_EXTRA_DISK_SIZE"
+    echo "Done. Seed configs generated in $SEEDS_DIR"
+    return 0
+  fi
+
   import_iso_if_needed
 
-  # Reconcile Control-plane 
-  reconcile_group "$VM_BASE_NAME_CP" "$CP_COUNT" "$net_uuid" "$sr_uuid" "cp" 2 4 20 0
+  # Control plane
+  reconcile_group "$VM_BASE_NAME_CP" "$CP_COUNT" "cp" "$CP_CPU" "$CP_RAM" "$CP_DISK" 0
 
-  # Reconcile Workers (с дополнительным диском)
+  # Workers
   local wk_extra_size=0
   if [[ "$WK_EXTRA_DISK_ENABLED" == "true" ]]; then
     wk_extra_size="$WK_EXTRA_DISK_SIZE"
   fi
-  reconcile_group "$VM_BASE_NAME_WK" "$WK_COUNT" "$net_uuid" "$sr_uuid" "wk" 4 16 100 "$wk_extra_size"
+  reconcile_group "$VM_BASE_NAME_WK" "$WK_COUNT" "wk" "$WK_CPU" "$WK_RAM" "$WK_DISK" "$wk_extra_size"
 
-  # Start all VMs only if flag is set
   if [[ "$START_VMS" == "true" ]]; then
     start_all_vms
 
-    # Wait for Talos API and bootstrap only if both flags are set
     if [[ "$RUN_BOOTSTRAP" == "true" ]]; then
       if wait_for_talos_api; then
         if bootstrap_cluster; then
-          # Install Cilium after successful bootstrap
           install_cilium
         else
           echo "Bootstrap failed, skipping Cilium installation"
