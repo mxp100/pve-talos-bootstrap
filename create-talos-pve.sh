@@ -267,12 +267,11 @@ attach_seed_iso() {
     exit 1
   fi
 
-  local iso_name
-  iso_name=$(basename "$iso_path")
-
-  # Подключаем как диск в read-only режиме (а не как CD-ROM)
-  # Используем свободный контроллер scsi2, чтобы не конфликтовать с системным и дополнительным диском
-  qm set "$vmid" --scsi2 "${STORAGE_ISO_NAME}:iso/${iso_name}" >/dev/null
+  # Импортируем seed ISO как обычный диск на STORAGE_IMAGE_NAME и вешаем его как scsi2
+  # Формат: STORAGE:SIZE_GB,import-from=/path/to/iso
+  # Размер диска берем минимальный "1" (1 ГиБ), seed маленький, этого достаточно.
+  echo "Importing seed ISO as disk for VMID $vmid..."
+  qm set "$vmid" --scsi2 "${STORAGE_IMAGE_NAME}:1,import-from=${iso_path}" >/dev/null
 }
 
 create_vm() {
