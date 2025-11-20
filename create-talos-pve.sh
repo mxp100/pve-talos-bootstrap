@@ -267,7 +267,7 @@ attach_seed_iso() {
 
   # Подключаем как диск в read-only режиме (а не как CD-ROM)
   # Используем свободный контроллер scsi2, чтобы не конфликтовать с системным и дополнительным диском
-  qm set "$vmid" --scsi2 "${STORAGE_ISO_NAME}:iso/${iso_name},media=disk,readonly=1" >/dev/null
+  qm set "$vmid" --scsi2 "${STORAGE_ISO_NAME}:iso/${iso_name}" >/dev/null
 }
 
 create_vm() {
