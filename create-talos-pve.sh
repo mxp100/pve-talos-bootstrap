@@ -199,10 +199,8 @@ create_seed_iso_from_mc() {
   # Базовый конфиг
   local config
   config=$(yq eval '... comments=""' "$config_file" | \
-    yq '.machine.kernel.args[0] = "net.ifnames=0"' | \
-    yq '.machine.kernel.args[1] = "biosdevname=0"' | \
     yq '.machine.network.hostname = "'"${vmname}"'"' | \
-    yq '.machine.network.interfaces[0].interface = "eth0"' | \
+    yq '.machine.network.interfaces[0].interface = "ens18"' | \
     yq '.machine.network.interfaces[0].dhcp = false' | \
     yq '.machine.network.interfaces[0].routes[0].gateway = "'"${GATEWAY}"'"' | \
     yq '.machine.network.interfaces[0].addresses[0] = "'"$ip_cidr"'"' | \
