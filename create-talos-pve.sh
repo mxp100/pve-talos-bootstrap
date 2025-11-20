@@ -265,8 +265,9 @@ attach_seed_iso() {
   local iso_name
   iso_name=$(basename "$iso_path")
 
-  # Подключаем вторым CD-ROM
-  qm set "$vmid" --ide3 "${STORAGE_ISO_NAME}:iso/${iso_name},media=cdrom" >/dev/null
+  # Подключаем как диск в read-only режиме (а не как CD-ROM)
+  # Используем свободный контроллер scsi2, чтобы не конфликтовать с системным и дополнительным диском
+  qm set "$vmid" --scsi2 "${STORAGE_ISO_NAME}:iso/${iso_name},media=disk,readonly=1" >/dev/null
 }
 
 create_vm() {
