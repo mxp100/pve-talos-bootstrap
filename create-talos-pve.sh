@@ -196,19 +196,11 @@ create_seed_iso_from_mc() {
 
   local ip_cidr="${ip}/${CIDR_PREFIX}"
 
-  # Пытаемся получить MAC-адрес net0 для этой ВМ
-  local vmid mac_addr
-  vmid=$(get_vmid_by_name "$vmname" || true)
-  if [[ -n "$vmid" ]]; then
-    mac_addr=$(qm config "$vmid" 2>/dev/null | \
-      awk '/^net0:/{print $2}' | awk -F'[=,]' '{print $2}')
-  else
-    mac_addr=""
-  fi
-
   # Базовый конфиг
   local config
   config=$(yq eval '... comments=""' "$config_file" | \
+    yq '.machine.kernel.args[0] = "net.ifnames=0"' | \
+    yq '.machine.kernel.args[1] = "biosdevname=0"' | \
     yq '.machine.network.hostname = "'"${vmname}"'"' | \
     yq '.machine.network.interfaces[0].interface = "eth0"' | \
     yq '.machine.network.interfaces[0].dhcp = false' | \
@@ -218,16 +210,6 @@ create_seed_iso_from_mc() {
     yq '.machine.install.image = "'"${ISO_INSTALLER_URL}"'"' | \
     yq '.machine.install.wipe = true' | \
     yq '.machine.install.disk = "/dev/sda"')
-
-  # Настраиваем интерфейс: если есть MAC, используем deviceSelector, иначе fallback на interface: eth0
-  if [[ -n "$mac_addr" ]]; then
-    config=$(echo "$config" | \
-      yq '.machine.network.interfaces[0].deviceSelector.hardwareAddr = "'"${mac_addr}"'"' | \
-      yq 'del(.machine.network.interfaces[0].interface)')
-  else
-    config=$(echo "$config" | \
-      yq '.machine.network.interfaces[0].interface = "eth0"')
-  fi
 
   for dns in "${DNS_SERVER[@]}"; do
     config=$(echo "$config" | yq eval '.machine.network.nameservers += ["'"$dns"'"]')
