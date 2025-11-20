@@ -5,6 +5,7 @@ set -euo pipefail
 SEEDS_ONLY=false
 START_VMS=false
 RUN_BOOTSTRAP=false
+CLEAN=false
 while [[ $# -gt 0 ]]; do
   case $1 in
     --seeds-only)
@@ -18,6 +19,10 @@ while [[ $# -gt 0 ]]; do
     --bootstrap)
       START_VMS=true
       RUN_BOOTSTRAP=true
+      shift
+      ;;
+    --clean)
+      CLEAN=true
       shift
       ;;
     *)
@@ -626,8 +631,36 @@ install_cilium() {
   return 0
 }
 
+clean_all_cluster_resources() {
+  echo "Cleaning all cluster VMs and local data for cluster '${CLUSTER_NAME}'..."
+
+  # Удаляем все ВМ с именами, начинающимися на VM_BASE_NAME_CP/VM_BASE_NAME_WK
+  qm list | awk 'NR>1 {print $1, $2}' | while read -r id nm; do
+    if [[ "$nm" =~ ^${VM_BASE_NAME_CP}[0-9]+$ ]] || [[ "$nm" =~ ^${VM_BASE_NAME_WK}[0-9]+$ ]]; then
+      echo "Removing VM: $nm (vmid=$id)"
+      destroy_vm_by_vmid "$id"
+    fi
+  done
+
+  # Удаляем локальные конфиги и сиды целиком
+  rm -rf "$(pwd)/config" || true
+  rm -rf "$(pwd)/seeds" || true
+
+  # По возможности удалим seed ISO из директории ISO
+  rm -f "${ISO_DIR}/${VM_BASE_NAME_CP}"*-seed.iso 2>/dev/null || true
+  rm -f "${ISO_DIR}/${VM_BASE_NAME_WK}"*-seed.iso 2>/dev/null || true
+
+  echo "Clean completed."
+}
+
 main() {
   echo "Preparing..."
+
+  if [[ "$CLEAN" == "true" ]]; then
+    # Режим полной очистки и выход
+    clean_all_cluster_resources
+    return 0
+  fi
 
   ensure_storage_exists
   check_and_install
