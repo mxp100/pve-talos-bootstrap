@@ -231,8 +231,7 @@ create_seed_iso_from_mc() {
   echo "$config" > "${src_dir}/config.yaml"
 
   if [[ "$SEEDS_ONLY" == "false" ]]; then
-    genisoimage -quiet -volid metal-iso -joliet -rock -o "$out_iso" \
-      -graft-points "config.yaml=${src_dir}/config.yaml"
+    genisoimage -quiet -volid "metal-iso" -joliet -rock -o "$out_iso" -graft-points "config.yaml=${src_dir}/config.yaml"
     echo "$out_iso"
   else
     echo "Seed config created: ${src_dir}/config.yaml"
@@ -267,9 +266,11 @@ attach_seed_iso() {
     exit 1
   fi
 
-  # Импортируем seed ISO как обычный диск на STORAGE_IMAGE_NAME и вешаем его как scsi2
-  echo "Importing seed ISO as disk for VMID $vmid..."
-  qm set "$vmid" --scsi2 "${STORAGE_IMAGE_NAME}:0,import-from=${iso_path}" >/dev/null
+  local iso_name
+  iso_name=$(basename "$iso_path")
+
+  # Подключаем вторым CD-ROM
+  qm set "$vmid" --ide3 "${STORAGE_ISO_NAME}:iso/${iso_name},media=cdrom" >/dev/null
 }
 
 create_vm() {
