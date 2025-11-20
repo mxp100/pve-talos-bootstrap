@@ -299,6 +299,9 @@ create_vm() {
     --ostype l26 \
     --scsihw virtio-scsi-pci >/dev/null
 
+  # Включаем QEMU Guest Agent
+  qm set "$vmid" --agent enabled=1 >/dev/null
+
   # Основной диск
   qm set "$vmid" --scsi0 "${STORAGE_IMAGE_NAME}:${disk_gib}" >/dev/null
 
