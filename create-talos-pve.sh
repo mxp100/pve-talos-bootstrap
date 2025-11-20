@@ -268,10 +268,8 @@ attach_seed_iso() {
   fi
 
   # Импортируем seed ISO как обычный диск на STORAGE_IMAGE_NAME и вешаем его как scsi2
-  # Формат: STORAGE:SIZE_GB,import-from=/path/to/iso
-  # Размер диска берем минимальный "1" (1 ГиБ), seed маленький, этого достаточно.
   echo "Importing seed ISO as disk for VMID $vmid..."
-  qm set "$vmid" --scsi2 "${STORAGE_IMAGE_NAME}:1,import-from=${iso_path}" >/dev/null
+  qm set "$vmid" --scsi2 "${STORAGE_IMAGE_NAME}:0,import-from=${iso_path}" >/dev/null
 }
 
 create_vm() {
