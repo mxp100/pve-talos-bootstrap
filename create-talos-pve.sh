@@ -644,7 +644,7 @@ clean_all_cluster_resources() {
   done
 
   # Удаляем локальные конфиги и сиды целиком
-  rm -rf "$(pwd)/config" || true
+#  rm -rf "$(pwd)/config" || true
   rm -rf "$(pwd)/seeds" || true
 
   # По возможности удалим seed ISO из директории ISO
