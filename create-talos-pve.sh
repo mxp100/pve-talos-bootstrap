@@ -578,10 +578,24 @@ install_cilium() {
 
   echo "Installing Cilium..."
   helm install cilium cilium/cilium \
-    --version 1.18.3 \
+    --version 1.18.6 \
     --namespace kube-system \
-    --set ipam.mode=kubernetes \
+    --set ipam.mode=cluster-pool \
+    --set ipv4NativeRoutingCIDR="10.244.0.0/16" \
+    --set clusterPoolIPv4PodCIDRList="{10.244.0.0/16}" \
+    --set clusterPoolIPv4MaskSize=24 \
     --set kubeProxyReplacement=false \
+    --set routingMode=native \
+    --set autoDirectNodeRoutes=true \
+    --set devices=ens18 \
+    --set bpf.masquerade=true \
+    --set bpf.hostRouting=true \
+    --set bandwidthManager.enabled=true \
+    --set bandwidthManager.bbr=true \
+    --set bigtcp.enabled=true \
+    --set nodePort.enabled=true \
+    --set mtu=0 \
+    --set enableXTSocketFallback=true \
     --set securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}" \
     --set securityContext.capabilities.cleanCiliumState="{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}" \
     --set cgroup.autoMount.enabled=false \
