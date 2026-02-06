@@ -577,14 +577,14 @@ install_cilium() {
   helm repo update
 
   echo "Installing Cilium..."
-  helm upgrade --install cilium cilium/cilium \
+helm upgrade --install cilium cilium/cilium \
     --version "v1.19.0" \
     --namespace kube-system \
     --wait \
     --set routingMode=tunnel \
     --set tunnelProtocol=vxlan \
     --set ipam.mode=cluster-pool \
-    --set ipv4NativeRoutingCIDR="10.244.0.0/16" \
+    --set ipv4NativeRoutingCIDR="192.168.100.0/24" \
     --set clusterPoolIPv4PodCIDRList="{10.244.0.0/16}" \
     --set-string policyEnforcementMode=default \
     --set bpf.hostLegacyRouting=false \
@@ -602,7 +602,7 @@ install_cilium() {
     --set bgpControlPlane.enabled=true \
     --set-string extraConfig.enable-service-load-balancer=true \
     --set kubeProxyReplacement=true \
-    --set k8sServiceHost="${CP_IPS[0]}" \
+    --set k8sServiceHost=127.0.0.1 \
     --set k8sServicePort=6443
 
   if [[ $? -ne 0 ]]; then
