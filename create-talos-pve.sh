@@ -43,6 +43,8 @@ fi
 
 # ========= CONFIG WITH DEFAULTS =========
 CLUSTER_NAME="${CLUSTER_NAME:-talos-pve}"
+KUBERNETES_VERSION="${KUBERNETES_VERSION:-1.33.6}"
+TALOS_VERSION="${TALOS_VERSION:-1.12.1}"
 
 # Proxmox storage/ISO/bridge
 STORAGE_ISO_NAME="${STORAGE_ISO_NAME:-local}"         # имя ISO storage Proxmox
@@ -436,7 +438,7 @@ generate_config() {
   mkdir -p "$config_dir"
 
   if [[ ! -f "$config_dir/controlplane.yaml" ]] || [[ ! -f "$config_dir/worker.yaml" ]]; then
-    talosctl gen config "$CLUSTER_NAME" "https://${CP_IPS[0]}:6443" -o "$config_dir"
+    talosctl gen config --kubernetes-version="$KUBERNETES_VERSION" --talos-version="$TALOS_VERSION" "$CLUSTER_NAME" "https://${CP_IPS[0]}:6443" -o "$config_dir"
     echo "Generated new Talos config files in $config_dir"
   else
     echo "Config files already exist in $config_dir, skipping generation"
