@@ -577,29 +577,31 @@ install_cilium() {
   helm repo update
 
   echo "Installing Cilium..."
-  helm install cilium cilium/cilium \
-    --version 1.18.6 \
+  helm upgrade --install cilium cilium/cilium \
+    --version "v1.19.0" \
     --namespace kube-system \
+    --wait \
+    --set routingMode=tunnel \
+    --set tunnelProtocol=vxlan \
     --set ipam.mode=cluster-pool \
     --set ipv4NativeRoutingCIDR="10.244.0.0/16" \
     --set clusterPoolIPv4PodCIDRList="{10.244.0.0/16}" \
-    --set clusterPoolIPv4MaskSize=24 \
-    --set kubeProxyReplacement=false \
-    --set routingMode=native \
-    --set autoDirectNodeRoutes=true \
-    --set devices=ens18 \
-    --set bpf.masquerade=true \
-    --set bpf.hostRouting=true \
-    --set bandwidthManager.enabled=true \
-    --set bandwidthManager.bbr=true \
-    --set bigtcp.enabled=true \
-    --set nodePort.enabled=true \
-    --set mtu=0 \
-    --set enableXTSocketFallback=true \
-    --set securityContext.capabilities.ciliumAgent="{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}" \
-    --set securityContext.capabilities.cleanCiliumState="{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}" \
+    --set-string policyEnforcementMode=default \
+    --set bpf.hostLegacyRouting=false \
+    --set cni.customConf=false \
+    --set-string cni.chainingMode=none \
     --set cgroup.autoMount.enabled=false \
     --set cgroup.hostRoot=/sys/fs/cgroup \
+    --set securityContext.capabilities.ciliumAgent='{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}' \
+    --set securityContext.capabilities.cleanCiliumState='{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}' \
+    --set bandwidthManager.enabled=true \
+    --set bandwidthManager.bbr=true \
+    --set hubble.enabled=true \
+    --set hubble.relay.enabled=true \
+    --set hubble.ui.enabled=true \
+    --set bgpControlPlane.enabled=true \
+    --set-string extraConfig.enable-service-load-balancer=true \
+    --set kubeProxyReplacement=true \
     --set k8sServiceHost="${CP_IPS[0]}" \
     --set k8sServicePort=6443
 
