@@ -596,33 +596,33 @@ install_cilium() {
   helm repo update
 
   echo "Installing Cilium..."
-helm upgrade --install cilium cilium/cilium \
-    --version "v1.19.0" \
-    --namespace kube-system \
-    --wait \
-    --set routingMode=tunnel \
-    --set tunnelProtocol=vxlan \
-    --set ipam.mode=cluster-pool \
-    --set ipv4NativeRoutingCIDR="192.168.100.0/24" \
-    --set clusterPoolIPv4PodCIDRList="{10.244.0.0/16}" \
-    --set-string policyEnforcementMode=default \
-    --set bpf.hostLegacyRouting=false \
-    --set cni.customConf=false \
-    --set-string cni.chainingMode=none \
-    --set cgroup.autoMount.enabled=false \
-    --set cgroup.hostRoot=/sys/fs/cgroup \
-    --set securityContext.capabilities.ciliumAgent='{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}' \
-    --set securityContext.capabilities.cleanCiliumState='{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}' \
-    --set bandwidthManager.enabled=true \
-    --set bandwidthManager.bbr=true \
-    --set hubble.enabled=true \
-    --set hubble.relay.enabled=true \
-    --set hubble.ui.enabled=true \
-    --set bgpControlPlane.enabled=true \
-    --set-string extraConfig.enable-service-load-balancer=true \
-    --set kubeProxyReplacement=true \
-    --set k8sServiceHost=127.0.0.1 \
-    --set k8sServicePort=6443
+  helm upgrade --install cilium cilium/cilium \
+      --version "v1.19.0" \
+      --namespace kube-system \
+      --wait \
+      --set routingMode=tunnel \
+      --set tunnelProtocol=vxlan \
+      --set ipam.mode=cluster-pool \
+      --set ipv4NativeRoutingCIDR="192.168.100.0/24" \
+      --set clusterPoolIPv4PodCIDRList="{10.244.0.0/16}" \
+      --set-string policyEnforcementMode=default \
+      --set bpf.hostLegacyRouting=false \
+      --set cni.customConf=false \
+      --set-string cni.chainingMode=none \
+      --set cgroup.autoMount.enabled=false \
+      --set cgroup.hostRoot=/sys/fs/cgroup \
+      --set securityContext.capabilities.ciliumAgent='{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}' \
+      --set securityContext.capabilities.cleanCiliumState='{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}' \
+      --set bandwidthManager.enabled=true \
+      --set bandwidthManager.bbr=true \
+      --set hubble.enabled=true \
+      --set hubble.relay.enabled=true \
+      --set hubble.ui.enabled=true \
+      --set bgpControlPlane.enabled=true \
+      --set-string extraConfig.enable-service-load-balancer=true \
+      --set kubeProxyReplacement=true \
+      --set k8sServiceHost="${VIP_IP}" \
+      --set k8sServicePort=6443
 
   if [[ $? -ne 0 ]]; then
     echo "Error: Failed to install Cilium"
