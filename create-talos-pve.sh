@@ -522,9 +522,26 @@ bootstrap_cluster() {
   local bootstrap_node="${CP_IPS[0]}"
   echo "Bootstrapping from node: $bootstrap_node"
 
-  talosctl --talosconfig "$(pwd)/config/talosconfig" \
-    --nodes "$bootstrap_node" \
-    bootstrap
+  local max_attempts=10
+  local attempt=1
+  while [[ $attempt -le $max_attempts ]]; do
+    echo "Running talos bootstrap (attempt ${attempt}/${max_attempts})..."
+    if talosctl --talosconfig "$(pwd)/config/talosconfig" \
+      --nodes "$bootstrap_node" \
+      bootstrap; then
+      echo "Bootstrap command succeeded"
+      break
+    fi
+
+    if [[ $attempt -ge $max_attempts ]]; then
+      echo "Error: talos bootstrap failed after $max_attempts attempts"
+      return 1
+    fi
+
+    echo "Bootstrap failed. Retrying in 5 seconds..."
+    sleep 5
+    attempt=$((attempt+1))
+  done
 
   echo "Bootstrap command sent. Waiting for Kubernetes to initialize..."
 
