@@ -217,8 +217,7 @@ create_seed_iso_from_mc() {
 
   if [[ "$role" == "cp" ]]; then
     config=$(echo "$config" | \
-      yq '.machine.network.interfaces[0].vip.ip = "'"${VIP_IP}"'"' | \
-      yq '.cluster.network.cni.name = "none"'
+      yq '.machine.network.interfaces[0].vip.ip = "'"${VIP_IP}"'"'
     )
 
     for cp_ip in "${CP_IPS[@]}"; do
@@ -438,7 +437,7 @@ generate_config() {
   mkdir -p "$config_dir"
 
   if [[ ! -f "$config_dir/controlplane.yaml" ]] || [[ ! -f "$config_dir/worker.yaml" ]]; then
-    talosctl gen config --kubernetes-version="$KUBERNETES_VERSION" --talos-version="$TALOS_VERSION" "$CLUSTER_NAME" "https://${CP_IPS[0]}:6443" -o "$config_dir"
+    talosctl gen config --kubernetes-version="$KUBERNETES_VERSION" --talos-version="$TALOS_VERSION" "$CLUSTER_NAME" "https://${CP_IPS[0]}:6443" ---config-patch @patch.yaml -o "$config_dir"
     echo "Generated new Talos config files in $config_dir"
   else
     echo "Config files already exist in $config_dir, skipping generation"
