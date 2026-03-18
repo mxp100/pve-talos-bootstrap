@@ -6,6 +6,11 @@ SEEDS_ONLY=false
 START_VMS=false
 RUN_BOOTSTRAP=false
 CLEAN=false
+ADD_NODE_MODE=false
+ADD_NODE_TYPE=""
+ADD_NODE_INDEX=""
+ADD_NODE_VMID=""
+
 while [[ $# -gt 0 ]]; do
   case $1 in
     --seeds-only)
@@ -25,9 +30,23 @@ while [[ $# -gt 0 ]]; do
       CLEAN=true
       shift
       ;;
+    --add-cp)
+      ADD_NODE_MODE=true
+      ADD_NODE_TYPE="cp"
+      ADD_NODE_INDEX="$2"
+      ADD_NODE_VMID="$3"
+      shift 3
+      ;;
+    --add-wk)
+      ADD_NODE_MODE=true
+      ADD_NODE_TYPE="wk"
+      ADD_NODE_INDEX="$2"
+      ADD_NODE_VMID="$3"
+      shift 3
+      ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 [--seeds-only] [--start-vms] [--bootstrap]"
+      echo "Usage: $0 [--seeds-only] [--start-vms] [--bootstrap] [--clean] [--add-cp INDEX VMID] [--add-wk INDEX VMID]"
       exit 1
       ;;
   esac
@@ -674,12 +693,97 @@ clean_all_cluster_resources() {
   echo "Clean completed."
 }
 
+add_single_node() {
+  local node_type="$1"  # cp or wk
+  local index="$2"
+  local vmid="$3"
+
+  echo "Adding single node: type=$node_type, index=$index, vmid=$vmid"
+
+  # Определяем параметры на основе типа
+  local name=""
+  local ip=""
+  local vcpu=""
+  local ram=""
+  local disk=""
+  local extra_disk=0
+
+  if [[ "$node_type" == "cp" ]]; then
+    name="${VM_BASE_NAME_CP}${index}"
+    ip="${CP_IPS[$((index-1))]}"
+    vcpu="$CP_CPU"
+    ram="$CP_RAM"
+    disk="$CP_DISK"
+  elif [[ "$node_type" == "wk" ]]; then
+    name="${VM_BASE_NAME_WK}${index}"
+    ip="${WK_IPS[$((index-1))]}"
+    vcpu="$WK_CPU"
+    ram="$WK_RAM"
+    disk="$WK_DISK"
+    if [[ "$WK_EXTRA_DISK_ENABLED" == "true" ]]; then
+      extra_disk="$WK_EXTRA_DISK_SIZE"
+    fi
+  else
+    echo "Error: Invalid node type '$node_type'. Must be 'cp' or 'wk'."
+    exit 1
+  fi
+
+  if [[ -z "$ip" ]]; then
+    echo "Error: No IP configured for index $index in ${node_type}_IPS array"
+    exit 1
+  fi
+
+  # Проверяем, существует ли VM
+  if vm_exists_by_name "$name" || qm config "$vmid" &>/dev/null; then
+    echo "Error: VM already exists: $name (vmid=$vmid)"
+    exit 1
+  fi
+
+  # Создаём VM
+  local created_vmid
+  created_vmid=$(create_vm "$name" "$vmid" "$vcpu" "$ram" "$disk" "$BRIDGE_NAME" "$extra_disk")
+  echo "VM created: $name (vmid=$created_vmid)"
+
+  # Подключаем Talos ISO
+  attach_talos_iso "$created_vmid" "$ISO_LOCAL_PATH"
+
+  # Создаём и подключаем seed ISO
+  local seed_iso
+  seed_iso=$(create_seed_iso_from_mc "$name" "$ip" "$node_type")
+  echo "Seed ISO: $seed_iso"
+  attach_seed_iso "$created_vmid" "$seed_iso"
+
+  echo "Successfully configured VM: $name ($ip) vmid=$created_vmid"
+}
+
 main() {
   echo "Preparing..."
 
   if [[ "$CLEAN" == "true" ]]; then
     # Режим полной очистки и выход
     clean_all_cluster_resources
+    return 0
+  fi
+
+  # Режим добавления одного узла
+  if [[ "$ADD_NODE_MODE" == "true" ]]; then
+    if [[ -z "$ADD_NODE_INDEX" ]] || [[ -z "$ADD_NODE_VMID" ]]; then
+      echo "Error: Index and VMID are required for --add-cp or --add-wk"
+      exit 1
+    fi
+
+    ensure_storage_exists
+    check_and_install
+
+    # Генерируем конфиг, если его нет
+    if [[ ! -f "$(pwd)/config/controlplane.yaml" ]] || [[ ! -f "$(pwd)/config/worker.yaml" ]]; then
+      generate_config
+    fi
+
+    import_iso_if_needed
+    add_single_node "$ADD_NODE_TYPE" "$ADD_NODE_INDEX" "$ADD_NODE_VMID"
+
+    echo "Done. Node added successfully!"
     return 0
   fi
 
