@@ -6,6 +6,8 @@ SEEDS_ONLY=false
 START_VMS=false
 RUN_BOOTSTRAP=false
 CLEAN=false
+WORKER_INDEX=""
+
 while [[ $# -gt 0 ]]; do
   case $1 in
     --seeds-only)
@@ -25,9 +27,18 @@ while [[ $# -gt 0 ]]; do
       CLEAN=true
       shift
       ;;
+    --worker-index)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for --worker-index"
+        echo "Usage: $0 [--seeds-only] [--start-vms] [--bootstrap] [--clean] [--worker-index N]"
+        exit 1
+      fi
+      WORKER_INDEX="$2"
+      shift 2
+      ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 [--seeds-only] [--start-vms] [--bootstrap]"
+      echo "Usage: $0 [--seeds-only] [--start-vms] [--bootstrap] [--clean] [--worker-index N]"
       exit 1
       ;;
   esac
@@ -595,7 +606,7 @@ install_cilium() {
   helm repo update
 
   echo "Installing Cilium..."
-  helm install \
+  helm upgrade --install \
       cilium \
       cilium/cilium \
       --version 1.18.0 \
@@ -706,10 +717,30 @@ main() {
     exit 1
   fi
 
+  if [[ -n "$WORKER_INDEX" ]]; then
+    if ! [[ "$WORKER_INDEX" =~ ^[0-9]+$ ]] || [[ "$WORKER_INDEX" -lt 1 ]]; then
+      echo "Error: --worker-index must be a positive integer"
+      exit 1
+    fi
+
+    if [[ "$WORKER_INDEX" -gt "${#WK_IPS[@]}" ]]; then
+      echo "Error: worker index $WORKER_INDEX exceeds WK_IPS array size (${#WK_IPS[@]})"
+      exit 1
+    fi
+
+    WK_COUNT="$WORKER_INDEX"
+  fi
+
   if [[ "$SEEDS_ONLY" == "true" ]]; then
     echo "Running in seeds-only mode..."
     reconcile_group "$VM_BASE_NAME_CP" "$CP_COUNT" "cp" "$CP_CPU" "$CP_RAM" "$CP_DISK" 0
-    reconcile_group "$VM_BASE_NAME_WK" "$WK_COUNT" "wk" "$WK_CPU" "$WK_RAM" "$WK_DISK" "$WK_EXTRA_DISK_SIZE"
+
+    if [[ -n "$WORKER_INDEX" ]]; then
+      reconcile_group "$VM_BASE_NAME_WK" "$WK_COUNT" "wk" "$WK_CPU" "$WK_RAM" "$WK_DISK" "$WK_EXTRA_DISK_SIZE"
+    else
+      reconcile_group "$VM_BASE_NAME_WK" "$WK_COUNT" "wk" "$WK_CPU" "$WK_RAM" "$WK_DISK" "$WK_EXTRA_DISK_SIZE"
+    fi
+
     echo "Done. Seed configs generated in $SEEDS_DIR"
     return 0
   fi
@@ -724,7 +755,12 @@ main() {
   if [[ "$WK_EXTRA_DISK_ENABLED" == "true" ]]; then
     wk_extra_size="$WK_EXTRA_DISK_SIZE"
   fi
-  reconcile_group "$VM_BASE_NAME_WK" "$WK_COUNT" "wk" "$WK_CPU" "$WK_RAM" "$WK_DISK" "$wk_extra_size"
+
+  if [[ -n "$WORKER_INDEX" ]]; then
+    reconcile_group "$VM_BASE_NAME_WK" "$WK_COUNT" "wk" "$WK_CPU" "$WK_RAM" "$WK_DISK" "$wk_extra_size"
+  else
+    reconcile_group "$VM_BASE_NAME_WK" "$WK_COUNT" "wk" "$WK_CPU" "$WK_RAM" "$WK_DISK" "$wk_extra_size"
+  fi
 
   if [[ "$START_VMS" == "true" ]]; then
     start_all_vms
