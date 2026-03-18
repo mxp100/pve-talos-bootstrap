@@ -317,6 +317,7 @@ create_vm() {
     --cpu host \
     --net0 "virtio,bridge=${bridge}" \
     --ostype l26 \
+    --machine q35 \
     --scsihw virtio-scsi-pci >/dev/null
 
   # Включаем QEMU Guest Agent
